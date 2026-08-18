@@ -91,7 +91,7 @@ class HeaderBar(QWidget):
 
         # apoyo al proyecto
         self.support_btn = QPushButton("♥")
-        self.support_btn.setToolTip("Apoya el proyecto")
+        self.support_btn.setToolTip("Support the project")
         self.support_btn.setCursor(Qt.PointingHandCursor)
         self.support_btn.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 13px;")
 

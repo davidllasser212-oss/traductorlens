@@ -62,4 +62,4 @@ MIT — see [LICENSE](LICENSE).
 
 TraductorLens is free and open source. If it saves you time, consider a small donation:
 
-ko-fi.com/davidllasser
+**Ko-fi: https://ko-fi.com/davidllasser**

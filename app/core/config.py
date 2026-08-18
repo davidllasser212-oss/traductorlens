@@ -12,7 +12,7 @@ DEFAULTS = {
     "target_lang": None,  # se resuelve al primer arranque
     "poll_interval_ms": 800,
     "click_through": True,
-    "support_url": "https://www.paypal.me/",
+    "support_url": "https://ko-fi.com/davidllasser",
 }
 
 
