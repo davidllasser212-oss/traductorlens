@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build
+build/
+dist/
+*.rar
+
+# Prototipo antiguo (tkinter)
+main.py
+
+# Editor / SO
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+
+# Basura
+Nuevo Documento de texto.txt
