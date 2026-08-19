@@ -8,6 +8,11 @@ venv/
 build/
 dist/
 *.rar
+testdata/reports/
+
+# Bundled OCR runtime (distributed in the release source archive)
+assets/tessdata/
+vendor/
 
 # Prototipo antiguo (tkinter)
 main.py

@@ -42,9 +42,7 @@ class Pipeline:
         self.on_status = None   # callable(state: str)
         self.on_text = None     # callable(translated: str, detected: str|None)
 
-        self._last_hash = None
-        self._stable_text = None
-        self._stable_count = 0
+        self._full_text = None
         self._translated_hash = None
 
     def start(self):
@@ -99,43 +97,50 @@ class Pipeline:
                 if self._translated_hash == h:
                     time.sleep(self.poll)
                     continue
-                if h == self._last_hash and self._stable_count == 0:
-                    time.sleep(self.poll)
-                    continue
-                self._last_hash = h
 
                 self._status("recognizing")
+                quick = None
+                try:
+                    quick = self.ocr.recognize_quick(frame)
+                except Exception as e:
+                    _dbg(f"quick OCR exception: {type(e).__name__}: {e}")
+                qtext = (quick.text or "") if quick else ""
+
+                if not qtext:
+                    if self._full_text:
+                        self._full_text = None
+                        self._emit("", quick.detected_lang if quick else None)
+                    self._status("idle")
+                    time.sleep(self.poll)
+                    continue
+
+                if qtext == self._full_text:
+                    self._status("idle")
+                    time.sleep(self.poll)
+                    continue
+
+                result = None
                 try:
                     result = self.ocr.recognize(frame)
                 except Exception as e:
                     _dbg(f"OCR exception: {type(e).__name__}: {e}")
-                    result = None
-                if result is None:
+                if result is None or not result.text:
+                    if self._full_text:
+                        self._full_text = None
+                        self._emit("", result.detected_lang if result else None)
                     self._status("idle")
                     time.sleep(self.poll)
                     continue
+
                 text = result.text
                 detected = result.detected_lang
                 _dbg(f"frame={frame.size} mean={sum(frame.convert('L').getdata()) // max(1, frame.width * frame.height)} text={text!r} detected={detected}")
 
-                if not text:
-                    self._stable_text = None
-                    self._stable_count = 0
-                    self._emit("", detected)
+                if text == self._full_text:
                     self._status("idle")
                     time.sleep(self.poll)
                     continue
-
-                if text == self._stable_text:
-                    self._stable_count += 1
-                else:
-                    self._stable_text = text
-                    self._stable_count = 1
-
-                if self._stable_count < 2:
-                    self._status("idle")
-                    time.sleep(self.poll)
-                    continue
+                self._full_text = text
 
                 self._status("translating")
                 translation = None

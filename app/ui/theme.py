@@ -1,5 +1,5 @@
 APP_NAME = "TraductorLens"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 # tokens de color (dark theme, estilo Windows 11 oscuro)
 BG_PANEL = "#202020"
