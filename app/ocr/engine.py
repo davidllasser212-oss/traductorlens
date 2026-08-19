@@ -1,5 +1,4 @@
 import io
-import re
 import threading
 
 from PIL import Image
@@ -17,17 +16,52 @@ def _init_winrt():
     return winrt.windows.media.ocr
 
 
-def _score_text(text):
-    """Calidad heurística del texto OCR: proporción de palabras con solo letras
-    (>=2 letras, sin dígitos ni símbolos). Un motor con el idioma correcto
-    puntúa ~1.0; uno equivocado que "adivina" suele puntuar bastante más bajo."""
+def _script_of(tag):
+    """Familia de alfabeto esperada para un tag de motor OCR."""
+    t = tag.lower()
+    if "zh" in t or "ja" in t or "ko" in t:
+        return "cjk"
+    if "ru" in t or "sr" in t or "uk" in t or "bg" in t:
+        return "cyr"
+    if "ar" in t or "fa" in t or "ur" in t or "he" in t:
+        return "arab"
+    return "latin"
+
+
+def _in_script(ch, want):
+    cp = ord(ch)
+    if want == "cjk":
+        return (
+            0x4E00 <= cp <= 0x9FFF
+            or 0x3400 <= cp <= 0x4DBF
+            or 0x3000 <= cp <= 0x303F
+        )
+    if want == "cyr":
+        return 0x0400 <= cp <= 0x04FF
+    if want == "arab":
+        return 0x0600 <= cp <= 0x06FF
+    return (cp < 128 and ch.isalpha()) or 0x00C0 <= cp <= 0x024F
+
+
+def _score_text(text, tag):
+    """Calidad heurística del texto OCR según el alfabeto esperado del motor.
+
+    Puntúa la proporción de caracteres (no espacios, no dígitos) que caen en el
+    script del tag. Un motor con el idioma correcto puntúa alto (~0.85+); uno
+    equivocado que "adivina" puntúa mucho más bajo (chino leído como latino
+    da ~0.0 para CJK). A diferencia de la versión por palabras, no se rompe con
+    escrituras sin separadores tipo CJK."""
     if not text:
         return 0.0
-    words = re.findall(r"\w+", text, flags=re.UNICODE)
-    if not words:
-        return 0.0
-    clean = sum(1 for w in words if len(w) >= 2 and all(ch.isalpha() for ch in w))
-    return clean / len(words)
+    want = _script_of(tag)
+    n = good = 0
+    for ch in text:
+        if ch.isspace() or ch.isdigit():
+            continue
+        n += 1
+        if _in_script(ch, want):
+            good += 1
+    return good / max(1, n)
 
 
 class OCRResult:
@@ -129,9 +163,13 @@ class OcrEngine:
         return OCRResult(text=(result.text or "").strip(), detected_lang=detected)
 
     def _recognize_auto(self, pil_image):
-        """Prueba todos los idiomas OCR instalados y elige el resultado de mejor
-        calidad (heurística de palabras limpias). Los idiomas del perfil de
-        usuario van primero para favorecer el caso habitual es-ES/en-US."""
+        """Prueba todos los idiomas OCR instalados y elige el mejor resultado.
+
+        Ranking por (score de script, longitud de texto): el desempate por
+        longitud evita falsos positivos cortos (p. ej. un motor árabe que
+        "adivina" 2 caracteres con score 1.0 frente al chino correcto y más
+        largo). Los idiomas del perfil de usuario van primero para el caso
+        habitual es-ES/en-US."""
         ocr = self._init_winrt()
         try:
             tags = sorted(
@@ -159,20 +197,26 @@ class OcrEngine:
         def _key(t):
             return (0 if t.lower() == profile_tag else 1, t.lower())
 
+        def _chars_len(text):
+            return sum(1 for ch in text if not ch.isspace())
+
         best = None
         best_score = -1.0
+        best_len = -1
         for tag in sorted(tags, key=_key):
             engine = self._create_engine(tag)
             if engine is None:
                 continue
             res = self._recognize_with(engine, pil_image)
-            score = _score_text(res.text)
-            if score > best_score:
+            score = _score_text(res.text, tag)
+            ln = _chars_len(res.text)
+            if score > best_score or (score == best_score and ln > best_len):
                 best_score = score
+                best_len = ln
                 best = res
-            if score >= 0.95:
+            if score >= 0.95 and ln >= 6:
                 break
-        if best is not None and best_score >= 0.5:
+        if best is not None and best_score >= 0.5 and best_len >= 1:
             return best
         engine = self._profile_engine()
         if engine is not None:
