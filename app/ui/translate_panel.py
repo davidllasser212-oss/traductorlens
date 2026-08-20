@@ -54,6 +54,7 @@ class TranslatePanel(QWidget):
         self.scroll.setStyleSheet("background: transparent; border: none;")
         self.text_label = QLabel("La traducción en vivo aparecerá aquí.\n"
                                  "Selecciona el área de la pantalla con el recuadro superior.")
+        self.text_label.setTextFormat(Qt.PlainText)
         self.text_label.setWordWrap(True)
         self.text_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.text_label.setFont(QFont(FONT_UI, 12))

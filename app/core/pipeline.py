@@ -8,6 +8,11 @@ from PIL import Image
 from app.ocr.engine import OcrEngine
 from app.translator.google import GoogleTranslator
 from app.translator.cache import TranslationCache
+from app.translator.formatting import (
+    protect_format,
+    restore_format,
+    translation_is_usable,
+)
 
 _DEBUG_LOG = os.environ.get("TRADUCTOR_DEBUG")
 
@@ -43,20 +48,31 @@ class Pipeline:
         self.on_text = None     # callable(translated: str, detected: str|None)
 
         self._full_text = None
+        self._translated_text = None
         self._translated_hash = None
+        self._retry_translation_at = 0.0
 
     def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self.translator.reset()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def stop(self):
         self._stop.set()
+        self.translator.cancel()
         if self._thread:
             self._thread.join(timeout=3)
 
     def set_languages(self, source, target):
         self.source_lang = source
         self.target_lang = target
+        self._full_text = None
+        self._translated_text = None
+        self._translated_hash = None
+        self._retry_translation_at = 0.0
         if source == "auto":
             self.ocr.set_language("auto")
         else:
@@ -80,8 +96,50 @@ class Pipeline:
                 pass
 
     def _frame_hash(self, img):
-        small = img.convert("L").resize((img.width // 8, img.height // 8))
+        small = img.convert("L").resize((max(1, img.width // 8), max(1, img.height // 8)))
         return hashlib.md5(small.tobytes()).hexdigest()
+
+    def _translate_formatted(self, text):
+        if "\n" in text:
+            translated_lines = []
+            for line in text.split("\n"):
+                if not line.strip():
+                    translated_lines.append("")
+                    continue
+                line_protected, line_state = protect_format(line)
+                line_translation = self.translator.translate(
+                    line_protected, src=self.source_lang, dst=self.target_lang
+                )
+                line_restored = restore_format(line_translation, line_state)
+                if line_restored is None or not translation_is_usable(
+                    line, line_restored, self.source_lang, self.target_lang
+                ):
+                    return None
+                if (
+                    self.source_lang != "auto"
+                    and self.source_lang != self.target_lang
+                    and line_restored.strip() == line.strip()
+                ):
+                    return None
+                translated_lines.append(line_restored)
+            return "\n".join(translated_lines)
+
+        protected, state = protect_format(text)
+        translated = self.translator.translate(
+            protected, src=self.source_lang, dst=self.target_lang
+        )
+        restored = restore_format(translated, state)
+        if restored is not None and translation_is_usable(
+            text, restored, self.source_lang, self.target_lang
+        ):
+            if (
+                self.source_lang != "auto"
+                and self.source_lang != self.target_lang
+                and restored.strip() == text.strip()
+            ):
+                return None
+            return restored
+        return None
 
     def _run(self):
         self._status("idle")
@@ -109,15 +167,25 @@ class Pipeline:
                 if not qtext:
                     if self._full_text:
                         self._full_text = None
+                        self._translated_text = None
+                        self._translated_hash = None
                         self._emit("", quick.detected_lang if quick else None)
                     self._status("idle")
                     time.sleep(self.poll)
                     continue
 
                 if qtext == self._full_text:
-                    self._status("idle")
-                    time.sleep(self.poll)
-                    continue
+                    if self._translated_text != self._full_text:
+                        if time.monotonic() >= self._retry_translation_at:
+                            pass
+                        else:
+                            self._status("idle")
+                            time.sleep(self.poll)
+                            continue
+                    else:
+                        self._status("idle")
+                        time.sleep(self.poll)
+                        continue
 
                 result = None
                 try:
@@ -127,6 +195,8 @@ class Pipeline:
                 if result is None or not result.text:
                     if self._full_text:
                         self._full_text = None
+                        self._translated_text = None
+                        self._translated_hash = None
                         self._emit("", result.detected_lang if result else None)
                     self._status("idle")
                     time.sleep(self.poll)
@@ -136,7 +206,7 @@ class Pipeline:
                 detected = result.detected_lang
                 _dbg(f"frame={frame.size} mean={sum(frame.convert('L').getdata()) // max(1, frame.width * frame.height)} text={text!r} detected={detected}")
 
-                if text == self._full_text:
+                if text == self._full_text and self._translated_text == text:
                     self._status("idle")
                     time.sleep(self.poll)
                     continue
@@ -146,13 +216,28 @@ class Pipeline:
                 translation = None
                 if self.cache is not None:
                     translation = self.cache.get(text, self.source_lang, self.target_lang)
+                    if translation and not translation_is_usable(
+                        text, translation, self.source_lang, self.target_lang
+                    ):
+                        self.cache.delete(text, self.source_lang, self.target_lang)
+                        translation = None
                 if translation is None:
-                    translation = self.translator.translate(
-                        text, src=self.source_lang, dst=self.target_lang
-                    )
+                    try:
+                        translation = self._translate_formatted(text)
+                    except Exception as e:
+                        _dbg(f"translation exception: {type(e).__name__}: {e}")
+                        translation = None
                     if self.cache is not None and translation:
                         self.cache.put(text, self.source_lang, self.target_lang, translation)
-                self._emit(translation or "", detected)
+                if not translation:
+                    self._emit(text, detected)
+                    self._retry_translation_at = time.monotonic() + 3.0
+                    self._status("error")
+                    time.sleep(self.poll)
+                    continue
+                self._translated_text = text
+                self._retry_translation_at = 0.0
+                self._emit(translation, detected)
                 self._status("ok")
                 self._translated_hash = h
             except Exception:
