@@ -99,47 +99,30 @@ class Pipeline:
         small = img.convert("L").resize((max(1, img.width // 8), max(1, img.height // 8)))
         return hashlib.md5(small.tobytes()).hexdigest()
 
-    def _translate_formatted(self, text):
-        if "\n" in text:
-            translated_lines = []
-            for line in text.split("\n"):
-                if not line.strip():
-                    translated_lines.append("")
-                    continue
-                line_protected, line_state = protect_format(line)
-                line_translation = self.translator.translate(
-                    line_protected, src=self.source_lang, dst=self.target_lang
-                )
-                line_restored = restore_format(line_translation, line_state)
-                if line_restored is None or not translation_is_usable(
-                    line, line_restored, self.source_lang, self.target_lang
-                ):
-                    return None
-                if (
-                    self.source_lang != "auto"
-                    and self.source_lang != self.target_lang
-                    and line_restored.strip() == line.strip()
-                ):
-                    return None
-                translated_lines.append(line_restored)
-            return "\n".join(translated_lines)
-
-        protected, state = protect_format(text)
-        translated = self.translator.translate(
-            protected, src=self.source_lang, dst=self.target_lang
-        )
-        restored = restore_format(translated, state)
-        if restored is not None and translation_is_usable(
-            text, restored, self.source_lang, self.target_lang
-        ):
-            if (
-                self.source_lang != "auto"
-                and self.source_lang != self.target_lang
-                and restored.strip() == text.strip()
-            ):
-                return None
-            return restored
-        return None
+    def _translate_formatted(self, text, detected=None):
+        out = []
+        changed = False
+        for line in text.split("\n"):
+            if not line.strip():
+                out.append("")
+                continue
+            protected, state = protect_format(line)
+            translated = self.translator.translate(
+                protected, src=self.source_lang, dst=self.target_lang
+            )
+            restored = restore_format(translated, state)
+            usable = restored is not None and translation_is_usable(
+                line, restored, self.source_lang, self.target_lang, detected
+            )
+            if usable:
+                out.append(restored)
+                changed = True
+            else:
+                out.append(line)
+        joined = "\n".join(out)
+        if not changed:
+            return None
+        return joined
 
     def _run(self):
         self._status("idle")
@@ -217,13 +200,13 @@ class Pipeline:
                 if self.cache is not None:
                     translation = self.cache.get(text, self.source_lang, self.target_lang)
                     if translation and not translation_is_usable(
-                        text, translation, self.source_lang, self.target_lang
+                        text, translation, self.source_lang, self.target_lang, detected
                     ):
                         self.cache.delete(text, self.source_lang, self.target_lang)
                         translation = None
                 if translation is None:
                     try:
-                        translation = self._translate_formatted(text)
+                        translation = self._translate_formatted(text, detected)
                     except Exception as e:
                         _dbg(f"translation exception: {type(e).__name__}: {e}")
                         translation = None

@@ -4,9 +4,9 @@ from dataclasses import dataclass
 
 
 _NUMBER_RE = re.compile(
-    r"(?<![\w])(?:[A-Za-z]{1,4})?\d(?:[\d.,:/%+\-]*\d)?%?(?![\w])"
+    r"(?<![A-Za-z0-9_])(?:[A-Za-z]{1,4})?\d(?:[\d.,:/%+\-]*\d)?%?(?![A-Za-z0-9_])"
 )
-_ID_RE = re.compile(r"(?<![\w])[A-Za-z]{1,10}[-_][A-Za-z0-9][A-Za-z0-9_-]*(?![\w])")
+_ID_RE = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]{1,10}[-_][A-Za-z0-9][A-Za-z0-9_-]*(?![A-Za-z0-9_])")
 _MARKER_RE = re.compile(r"__FMT(?:NUM|BRK|PAR)_[A-Z]+__")
 
 
@@ -95,24 +95,36 @@ def restore_format(translated, state):
     return restored
 
 
+def _subsequence_preserved(source_tokens, translated_tokens):
+    """Cada token del origen debe aparecer en la traducción en el mismo orden
+    (la traducción puede generar tokens nuevos, p. ej. nombres propios)."""
+    iterator = iter(translated_tokens)
+    return all(any(token == item for item in iterator) for token in source_tokens)
+
+
 def format_is_valid(source, translated):
     if not translated:
         return False
     source_tokens = extract_numeric_tokens(source)
     translated_tokens = extract_numeric_tokens(translated)
-    if source_tokens != translated_tokens:
+    if not _subsequence_preserved(source_tokens, translated_tokens):
         return False
     return source.count("\n") == translated.count("\n")
 
 
-def translation_is_usable(source, translated, src="auto", dst="es"):
+def translation_is_usable(source, translated, src="auto", dst="es", detected=None):
     if not format_is_valid(source, translated):
         return False
-    if src != "auto" and src != dst:
+    if src != dst:
         def normalize(value):
             value = unicodedata.normalize("NFKC", value or "").casefold()
             return "".join(ch for ch in value if not ch.isspace())
 
-        if normalize(source) == normalize(translated):
+        same_language = (
+            src == "auto"
+            and detected is not None
+            and str(detected).split("-")[0].casefold() == str(dst).casefold()
+        )
+        if not same_language and normalize(source) == normalize(translated):
             return False
     return True

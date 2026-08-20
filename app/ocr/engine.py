@@ -366,7 +366,7 @@ class OCRResult:
     def __init__(self, text="", detected_lang=None, lines=None):
         self.text = text
         self.detected_lang = detected_lang
-        self.lines = lines if lines is not None else ([text] if text else [])
+        self.lines = lines if lines is not None else (text.splitlines() if text else [])
 
     def __bool__(self):
         return bool(self.text)
@@ -479,7 +479,7 @@ class OcrEngine:
         except Exception:
             pass
         return OCRResult(
-            text=(result.text or "").strip(),
+            text="\n".join(lines) if lines else (result.text or "").strip(),
             detected_lang=detected,
             lines=lines,
         )
